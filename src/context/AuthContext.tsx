@@ -1,15 +1,17 @@
+import axios from 'axios';
 import {
-    createContext,
-    useCallback,
-    useContext,
-    useEffect,
-    useState,
-    type ReactNode,
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useState,
+  type ReactNode,
 } from 'react';
 import { authApi, type LoginRequest, type RegisterRequest } from '../api/authApi';
-import { decodeJwt, isExpired } from '../auth/jwt';
 import { tokenStore } from '../auth/tokenStore';
 import type { User } from '../types';
+
+const baseURL = import.meta.env.VITE_API_URL ?? 'http://localhost:8080/api';
 
 interface AuthContextValue {
   user: User | null;
@@ -17,34 +19,54 @@ interface AuthContextValue {
   isLoading: boolean;
   login: (body: LoginRequest) => Promise<void>;
   register: (body: RegisterRequest) => Promise<void>;
-  logout: () => void;
+  logout: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
+  const [isLoading, setIsLoading] = useState(true); 
 
-  const logout = useCallback(() => {
+  const logout = useCallback(async () => {
+    try {
+      await axios.post(`${baseURL}/auth/logout`, {}, { withCredentials: true });
+    } catch {
+
+    }
     tokenStore.set(null);
     setUser(null);
   }, []);
 
+
+
   useEffect(() => {
-    const handler = () => logout();
+    axios
+      .post(`${baseURL}/auth/refresh`, {}, { withCredentials: true })
+      .then(async (res) => {
+        tokenStore.set(res.data.accessToken);
+        const me = await authApi.me();
+        setUser(me);
+      })
+      .catch(() => {
+        tokenStore.set(null);
+      })
+      .finally(() => setIsLoading(false));
+  }, []);
+
+  useEffect(() => {
+    const handler = () => {
+      tokenStore.set(null);
+      setUser(null);
+    };
     window.addEventListener('auth:unauthorized', handler);
     return () => window.removeEventListener('auth:unauthorized', handler);
-  }, [logout]);
+  }, []);
 
   const login = useCallback(async (body: LoginRequest) => {
     setIsLoading(true);
     try {
       const { accessToken } = await authApi.login(body);
-      const payload = decodeJwt(accessToken);
-      if (!payload || isExpired(payload)) {
-        throw new Error('Received an invalid or already-expired token');
-      }
       tokenStore.set(accessToken);
       const me = await authApi.me();
       setUser(me);
@@ -63,14 +85,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [login]);
 
-  const value: AuthContextValue = {
-    user,
-    isAuthenticated: !!user,
-    isLoading,
-    login,
-    register,
-    logout,
-  };
+  const value: AuthContextValue = { user, isAuthenticated: !!user, isLoading, login, register, logout };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
